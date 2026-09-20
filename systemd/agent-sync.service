@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync Codex/Claude Code conversations and Claude memories with the MacBook (Tailscale)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/haptica/Documents/Codex/agent-sync/scheduled_sync.py
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min

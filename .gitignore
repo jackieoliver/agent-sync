@@ -1,0 +1,8 @@
+# runtime data: baselines list private transcripts, backups hold transcript copies
+state/
+__pycache__/
+*.pyc
+linux-baseline.json
+mac-baseline.json
+mac-known-hosts
+config.json

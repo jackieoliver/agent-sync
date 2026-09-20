@@ -1,0 +1,10 @@
+{
+  "mac_user": "MAC_UNIX_USER",
+  "mac_hosts": ["TAILSCALE_IP_OF_MAC", "LAN_IP_OF_MAC"],
+  "mac_remote_dir": "/Users/MAC_UNIX_USER/Documents/Codex/agent-sync",
+  "linux": {"home": "/home/LINUX_USER", "github": "/home/LINUX_USER/GitHub",
+            "app_store": "/home/LINUX_USER/.config/Claude/claude-code-sessions"},
+  "mac": {"home": "/Users/MAC_UNIX_USER", "github": "/Users/MAC_UNIX_USER/Documents/GitHub",
+          "app_store": "/Users/MAC_UNIX_USER/Library/Application Support/Claude/claude-code-sessions"},
+  "alert_email": "you@example.com"
+}
