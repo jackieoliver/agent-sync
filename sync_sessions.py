@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 BASE = Path(__file__).resolve().parent
@@ -95,9 +96,17 @@ def plan(source, destination, direction, historical):
 def transfer(source, destination, run, files):
     if not files:
         return {'applied': [], 'skipped': []}
+    # Ask the destination first: anything it would refuse is never staged or transferred.
+    pre = call(destination, {'op': 'precheck', 'run': run, 'files': files})
+    busy = {(a['agent'], a['path']) for a in pre['active']}
+    files = [f for f in files if (f['agent'], f['path']) not in busy]
+    if not files:
+        return {'applied': [], 'skipped': pre['active']}
     ready = call(source, {'op': 'prepare', 'run': run, 'files': files})
     selected = ready['files']
+    ready['skipped'] += pre['active']
     if not selected:
+        call(source, {'op': 'cleanup', 'run': run})
         return {'applied': [], 'skipped': ready['skipped']}
     filelist = BASE / 'state' / ('files-' + run + '.txt')
     filelist.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -115,7 +124,16 @@ def transfer(source, destination, run, files):
     subprocess.run(['rsync', '-rltz', '--from0', '--files-from=' + str(filelist),
                     '-e', shlex.join(SSH), src, dst], check=True, timeout=900,
                    stdout=subprocess.DEVNULL)
-    result = call(destination, {'op': 'apply', 'run': run, 'files': selected})
+    try:
+        result = call(destination, {'op': 'apply', 'run': run, 'files': selected})
+    finally:
+        # Staging is transient: drop this run's copies on both sides (and any stale leftovers).
+        for side in (source, destination):
+            try:
+                call(side, {'op': 'cleanup', 'run': run})
+            except Exception:
+                pass
+        filelist.unlink(missing_ok=True)
     result['skipped'] += ready['skipped']
     return result
 
@@ -136,6 +154,9 @@ def main():
         except BlockingIOError:
             print('Another synchronization is already running.')
             return
+        for old in state.glob('details-*.json'):
+            if time.time() - old.stat().st_mtime > 14 * 86400:
+                old.unlink(missing_ok=True)
         historical = historical_ids()
         linux, mac = call('linux', {'op': 'inventory'}), call('mac', {'op': 'inventory'})
         run = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]

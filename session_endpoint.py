@@ -257,6 +257,52 @@ def apply(home, state, request):
     return {'applied': applied, 'skipped': skipped}
 
 
+def precheck(home, state, request):
+    """Report planned destinations that would be refused, so the source never stages them."""
+    active = []
+    for item in request['files']:
+        agent, rel = item['agent'], item['path']
+        destrel = item.get('destination', rel)
+        try:
+            sid = identity(agent, destrel)
+            dest = confined(home / ('.' + agent), destrel)
+        except ValueError:
+            continue
+        busy = False
+        if agent == 'codex':
+            with codex_guard(home / '.codex', sid) as available:
+                busy = not available
+        if not busy and dest.exists():
+            busy = (time.time_ns() - dest.stat().st_mtime_ns < QUIET_SECONDS * 10**9) or file_open(dest)
+        if busy:
+            active.append({'agent': agent, 'path': rel, 'reason': 'active destination'})
+    return {'active': active}
+
+
+def cleanup(state, request):
+    """Delete this run's staging on both directions, plus stale leftovers from crashed runs."""
+    removed = []
+    for kind in ('outgoing', 'incoming'):
+        base = state / kind
+        if not base.is_dir():
+            continue
+        for d in base.iterdir():
+            if not d.is_dir():
+                continue
+            stale = time.time() - d.stat().st_mtime > request.get('stale_seconds', 2 * 3600)
+            if d.name == request.get('run') or stale or request.get('all'):
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append(kind + '/' + d.name)
+    keep_days = request.get('backup_keep_days', 14)
+    backups = state / 'backups'
+    if backups.is_dir():
+        for d in backups.iterdir():
+            if d.is_dir() and time.time() - d.stat().st_mtime > keep_days * 86400:
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append('backups/' + d.name)
+    return {'removed': removed}
+
+
 def catalog(state, verify_ids=()):
     exe = None
     for candidate in ('/usr/lib/chatgpt/resources/codex', '/Applications/ChatGPT.app/Contents/Resources/codex', '/Applications/Codex.app/Contents/Resources/codex'):
@@ -348,6 +394,10 @@ def main():
             result = apply(home, state, req)
         elif req['op'] == 'catalog':
             result = catalog(state, req.get('verify_ids', []))
+        elif req['op'] == 'precheck':
+            result = precheck(home, state, req)
+        elif req['op'] == 'cleanup':
+            result = cleanup(state, req)
         else:
             raise ValueError('unsupported operation')
     print(json.dumps(result))
