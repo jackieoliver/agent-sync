@@ -185,6 +185,32 @@ def prefix_of(a, b):
                 return False
 
 
+HOUSEKEEPING = (b'"type":"bridge-session"', b'"type": "bridge-session"',
+                b'"type":"artifact-comment-monitor"', b'"type": "artifact-comment-monitor"')
+
+
+def content_lines(path):
+    """Conversation records only: per-app bookkeeping lines are rewritten by each machine's app."""
+    out = []
+    with path.open('rb') as f:
+        for line in f:
+            if any(tag in line for tag in HOUSEKEEPING):
+                continue
+            out.append(line)
+    return out
+
+
+def compare_content(dest, source):
+    """'same' | 'prefix' (dest is a prefix of source) | 'ahead' (source is a prefix of dest) | 'diverged'."""
+    a, b = content_lines(dest), content_lines(source)
+    n = min(len(a), len(b))
+    if a[:n] != b[:n]:
+        return 'diverged'
+    if len(a) == len(b):
+        return 'same'
+    return 'prefix' if len(a) < len(b) else 'ahead'
+
+
 def apply(home, state, request):
     applied, skipped = [], []
     stage = state / 'incoming' / request['run']
@@ -223,9 +249,17 @@ def apply(home, state, request):
                     continue
                 # Never choose a winner for diverged histories or overwrite compacted history.
                 if not prefix_of(dest, source):
-                    reason = 'destination already ahead' if prefix_of(source, dest) else 'diverged histories'
-                    skipped.append({'agent': agent, 'path': rel, 'reason': reason})
-                    continue
+                    if source.suffix == '.jsonl':
+                        relation = compare_content(dest, source)
+                    else:
+                        relation = 'ahead' if prefix_of(source, dest) else 'diverged'
+                    if relation == 'same':
+                        skipped.append({'agent': agent, 'path': rel, 'reason': 'housekeeping only'})
+                        continue
+                    if relation != 'prefix':
+                        reason = 'destination already ahead' if relation == 'ahead' else 'diverged histories'
+                        skipped.append({'agent': agent, 'path': rel, 'reason': reason})
+                        continue
                 backup = confined(state / 'backups' / request['run'] / agent, destrel)
                 backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 shutil.copy2(dest, backup)

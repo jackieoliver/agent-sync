@@ -11,7 +11,7 @@ import time
 
 BASE = Path(__file__).resolve().parent
 STATE = BASE / 'state'
-BENIGN = {'active destination', 'open conversation', 'recently active or absent',
+BENIGN = {'active destination', 'open conversation', 'recently active or absent', 'housekeeping only',
           'changed during snapshot', 'destination changed since preview',
           'destination became active', 'destination appeared', 'destination already ahead'}
 NETWORK_ERRORS = ('network is unreachable', 'no route to host', 'connection timed out',
@@ -76,6 +76,10 @@ def transition(old, status, message, now):
             state['message'] = 'Conversation sync has recovered: two consecutive checks completed successfully.'
         return state
     state['consecutive_successes'] = 0
+    if status == 'conflict':
+        # The run completed; only the named files were left alone. Don't let a standing
+        # conflict look like the sync stopped working.
+        state['last_success'] = now
     eligible = status in ('conflict', 'storage_full') or state['consecutive_failures'] >= 3
     if eligible and not old.get('alert_active'):
         state.update(notify=True, alert_active=True, alert_kind=status, last_alert=now)
