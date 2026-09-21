@@ -185,23 +185,25 @@ def prefix_of(a, b):
                 return False
 
 
-HOUSEKEEPING = (b'"type":"bridge-session"', b'"type": "bridge-session"',
-                b'"type":"artifact-comment-monitor"', b'"type": "artifact-comment-monitor"')
-
-
 def content_lines(path):
-    """Conversation records only: per-app bookkeeping lines are rewritten by each machine's app."""
+    """Claude conversation records only.
+
+    A Claude transcript interleaves conversation records (user, assistant, attachment,
+    system - each carries a "uuid") with per-app bookkeeping the desktop app rewrites
+    locally (bridge-session, queue-operation, artifact-*, atis-latch, last-prompt, ...,
+    none of which carry one). Two machines holding the same conversation legitimately
+    differ in the bookkeeping, so only the uuid-bearing records decide divergence.
+    """
     out = []
     with path.open('rb') as f:
         for line in f:
-            if any(tag in line for tag in HOUSEKEEPING):
-                continue
-            out.append(line)
+            if b'"uuid"' in line:
+                out.append(line)
     return out
 
 
 def compare_content(dest, source):
-    """'same' | 'prefix' (dest is a prefix of source) | 'ahead' (source is a prefix of dest) | 'diverged'."""
+    """'same' | 'prefix' (dest is a prefix of source) | 'ahead' | 'diverged'."""
     a, b = content_lines(dest), content_lines(source)
     n = min(len(a), len(b))
     if a[:n] != b[:n]:
@@ -249,7 +251,7 @@ def apply(home, state, request):
                     continue
                 # Never choose a winner for diverged histories or overwrite compacted history.
                 if not prefix_of(dest, source):
-                    if source.suffix == '.jsonl':
+                    if agent == 'claude' and source.suffix == '.jsonl':
                         relation = compare_content(dest, source)
                     else:
                         relation = 'ahead' if prefix_of(source, dest) else 'diverged'
