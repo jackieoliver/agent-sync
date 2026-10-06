@@ -10,7 +10,7 @@ Configured September 18, 2026. Linux cutoff recorded at 2026-09-19T00:25:11.4186
 - Conversations present on Linux before setup never upload to the Mac, even if resumed later.
 - New conversations sync in both directions. Imported Mac conversations can also sync later edits in either direction.
 - Open conversations and files changed within the last two minutes are deferred.
-- Existing destination files are updated only when they are an exact byte-prefix of the incoming version. Diverged or compacted histories are left untouched for review. Deletions are not propagated.
+- Existing Codex destination files require byte-prefix compatibility. Claude JSONL can also be compared by ordered UUID-bearing conversation records, ignoring machine-specific housekeeping; matching conversation prefixes can be updated. Diverged conversation content is left untouched for review. Source deletions are not propagated; staging files and older backups have a separate cleanup policy.
 - Project files, login credentials, app settings, plugins, memories, and databases are not included. Original project paths inside transcripts are preserved; resuming work on another machine may require selecting an available local project folder.
 
 ## Automatic operation
@@ -73,11 +73,11 @@ The helper defers active files and refuses divergent overwrites; it does not sto
 
 The five-minute automation runs `check_sync_health.py`, which invokes the original safe sync. It saves health status to `state/sync-health.json`.
 
-- Three consecutive non-network failures trigger an alert in the Codex task. Network outages and sleeping/offline devices are recorded as waiting for connection, with no alert regardless of duration.
+- Three consecutive non-network failures trigger a desktop alert through `scheduled_sync.py`. Network outages and sleeping/offline devices are recorded as waiting for connection, with no alert regardless of duration.
 - A disk-full error or unresolved history conflict triggers an immediate alert.
 - Only one problem alert is emitted per unresolved incident; there are no daily reminders.
 - Two consecutive successful checks silently clear an incident; recovery notices are disabled. A brief success followed by another failure does not generate repeated alerts.
 - Open conversations and overlapping checks are normal deferrals.
 - If the checker itself fails, the automation reports a new monitoring failure and suppresses repeated notices for the same unresolved failure.
 
-This is a Codex task notification, not a separate email/SMS service. It cannot notify while Codex or the Linux computer is stopped. Desktop or phone push delivery depends on app notification settings and has not been tested. Storage reserves and staging cleanup are still not implemented. Alerts now go through `scheduled_sync.py` and `notify-send` instead of Codex.
+Current desktop alerts use `scheduled_sync.py` and `notify-send`; they require the Linux scheduler to run. The separate Claude email task described above consumes `state/alert-pending.json` when that app is available. Phone push delivery has not been verified. Endpoint cleanup removes completed/stale staging and retains replacement backups for 14 days by default; storage reservations are not implemented.

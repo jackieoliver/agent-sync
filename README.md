@@ -1,71 +1,93 @@
-# agent-sync
+# Agent Sync
 
-Two-way sync of AI coding-assistant state between a Mac and a Linux workstation:
-Codex and Claude Code conversations, Claude Code memory files, and Claude desktop
-sidebar records. A systemd user timer runs it every five minutes over SSH/rsync.
-It uses no model tokens.
+**Continue an AI coding conversation on another computer without losing either copy.**
 
-I work across a MacBook and a Linux GPU workstation. Each assistant keeps its
-history in machine-local stores, so a conversation started on one machine was
-invisible on the other. This closes that gap without ever risking either side's data.
+I built this to work across a MacBook and a Linux workstation. Coding assistants
+keep conversations, project memories, and sidebar records in local stores; copying
+those files naively can overwrite new edits or move a conversation without making
+it visible in the other app.
 
-## Design
+Built by **Jackie Oliver**, September 2026.
 
-- **Never destructive.** Nothing is deleted. Every file that gets overwritten is
-  backed up first.
-- **Prefix-only updates.** An existing conversation on the destination is updated
-  only when it is an exact byte-prefix of the incoming version. Diverged or compacted
-  histories are left alone and reported as conflicts. The sync never guesses a winner.
-- **Defers live files.** Open conversations and files changed in the last two minutes
-  wait for the next run.
-- **Historical cutoff.** Frozen baseline files list the pre-existing Linux conversations
-  that must never upload to the Mac. The cutoff holds even if an old conversation is
-  resumed later.
-- **Memory sync.** Newest file wins, with a 60 s settle window. Same-second edits on
-  both machines are reported as conflicts. `MEMORY.md` indexes are merged by link target
-  rather than overwritten.
-- **Path mapping.** Desktop sidebar records are rewritten for the other machine (home
-  prefix swap; GitHub roots matched case-insensitively), so synced sessions open and
-  resume there.
-- **Host selection.** Tries Tailscale first, then direct Ethernet. Both host keys are
-  pinned.
+**Stack:** Python standard library · SSH/rsync · systemd · JSONL · SHA-256
 
-## Monitoring
+## What it does
 
-`check_sync_health.py` turns run results into deduplicated incidents:
+- Transfers Codex and Claude Code conversations between two machines.
+- Synchronizes Claude Code project memories and desktop sidebar records.
+- Defers active conversations, detects conflicting histories, and backs up replacements.
+- Runs on a five-minute Linux timer, with no model calls in the sync path.
 
-- three consecutive non-network failures
-- disk full
-- an unresolved conflict
-- **stale:** the Mac answers on port 22, but nothing has synced for two hours
-
-Each incident produces exactly one alert, as a desktop notification plus an email.
-Being offline is never an alert, and recovery is silent after two healthy checks.
-
-## Layout
-
-| File | Role |
-| --- | --- |
-| `sync_sessions.py` | Conversation transfer with cutoff, prefix check and deferral |
-| `session_endpoint.py` | Conservative transfer endpoint on the Mac side |
-| `memory_sync.py` | Claude Code memory sync and `MEMORY.md` merge |
-| `app_sessions_sync.py` | Desktop sidebar record sync and path rewriting |
-| `codex_regroup.py` | Regroups Codex threads into projects by working folder |
-| `check_sync_health.py` | Health check and incident deduplication |
-| `scheduled_sync.py` | systemd entry point: health-checked sync, then memory sync |
-| `mac_host.py` | Reachable-address selection (Tailscale, then Ethernet) |
-| `systemd/` | User service and five-minute timer |
-
-## Setup
-
-```sh
-cp config.example.json config.json          # machine-specific values; gitignored
-python3 sync_sessions.py                    # read-only preview
-python3 sync_sessions.py --apply            # apply eligible changes
-systemctl --user enable --now agent-sync.timer
+```mermaid
+flowchart LR
+    A[Inventory both machines] --> B[Plan eligible transfers]
+    B --> C[Stage source snapshots]
+    C --> D[Check identity, checksum, and destination]
+    D --> E{Safe extension?}
+    E -->|Yes| F[Back up and atomically replace]
+    E -->|No| G[Defer or report conflict]
+    F --> H[Verify and report health]
 ```
 
-The initial migration copied 824 Codex history files and 890 Claude files. Checksums
-were verified independently on each destination.
+## Why the synchronization logic works this way
 
-Operational runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md).
+| Decision | Reasoning and implementation |
+| --- | --- |
+| Compare content before replacing a conversation. | A newer modification time does not establish which history contains the other. Codex updates require byte-prefix compatibility. Claude can also compare ordered conversation records while ignoring machine-specific housekeeping records. Divergent conversation content is left for review. |
+| Recheck at the destination. | A transfer plan can become stale while bytes are moving. The endpoint checks the expected destination digest, active-file state, and source checksum; it checks again before replacement. |
+| Stage, back up, then commit a file change. | Transfer and publication are separate. Replacements use a temporary file and atomic rename; new files use an atomic create that refuses to replace a file that appeared meanwhile. This reduces partial-write and overwrite risks. |
+| Defer live files. | Open conversations and files changed within two minutes wait for another run. The endpoint also checks the Codex writer guard. |
+| Record a fixed historical cutoff. | Pre-existing Linux conversations must remain excluded from upload to the Mac even if they are resumed later. A frozen identity baseline implements that policy. |
+| Give memories a different merge policy. | Project memories are mutable documents, not append-only conversations. They use a settle window, newer-file selection, and same-second conflict reporting; `MEMORY.md` indexes merge entries by link target. |
+| Treat offline machines differently from failures. | A sleeping laptop is normal. Access failures, storage exhaustion, conflicts, and missing verified reports need attention; routine offline periods do not. |
+
+These are implemented safeguards, not a claim of zero possible data loss. The
+protocol operates over changing application-owned files and does not provide a
+transaction spanning both computers. Source deletions are not propagated;
+temporary staging data and older backups are cleaned up separately.
+
+## Read the implementation
+
+| File | What to look for |
+| --- | --- |
+| [sync_sessions.py](sync_sessions.py) | Identity matching, historical exclusions, planning, staging, and transfer orchestration. |
+| [session_endpoint.py](session_endpoint.py) | Path confinement, checksum checks, conversation comparison, conflict handling, backup, and atomic publication. |
+| [memory_sync.py](memory_sync.py) | Project pairing and document/index merge policy. |
+| [app_sessions_sync.py](app_sessions_sync.py) | Sidebar-record synchronization and cross-machine path mapping. |
+| [check_sync_health.py](check_sync_health.py) | Verified-report checks, incident state, and recovery hysteresis. |
+| [scheduled_sync.py](scheduled_sync.py) | Timer entrypoint, reachability, and deduplicated desktop alerts. |
+
+## Development history
+
+The repository retains the original implementation and follow-up fixes:
+
+- [Initial synchronization system](https://github.com/jackieoliver/agent-sync/commit/e57771d).
+- [Staging cleanup, prechecks, and Ethernet fallback](https://github.com/jackieoliver/agent-sync/commit/eee921f).
+- [Conversation-record comparison](https://github.com/jackieoliver/agent-sync/commit/10b5460): two machines can have the same conversation but different app bookkeeping.
+- [Conflict monitoring correction](https://github.com/jackieoliver/agent-sync/commit/267d708): a standing conflict should not make a completed run look stale.
+
+## Setup and operating boundaries
+
+This is an operational tool for a configured pair of machines, not an install-and-run
+service. It needs SSH access, host-key verification, machine paths, the frozen
+historical baselines, and the endpoint scripts on both hosts. Follow the
+[operations runbook](docs/OPERATIONS.md) before running it.
+
+From a configured checkout, `python3 sync_sessions.py` previews a transfer plan
+without applying conversation replacements. It still contacts the other machine.
+`--apply` performs eligible transfers. Do not use an unrestricted third-party sync
+command in place of this helper: it does not implement this project's cutoff.
+
+## Evidence and limitations
+
+The operations record documents the initial migration of **824 Codex history
+files and 890 Claude files**, with destination checksums checked at the time.
+Those are historical deployment results, not a benchmark rerun for this README.
+
+The public repository does not currently contain a standalone automated regression
+suite. The runbook records earlier regression checks, but they are not reproducible
+from a committed test harness here. Application storage formats can change, and
+cross-machine behavior requires configured hosts to validate.
+
+The core sync uses no model tokens. Optional email escalation is a separately
+configured Claude scheduled task; it is not an email service provided by this repo.
