@@ -1,5 +1,7 @@
 # Operations runbook
 
+> **Since 2026-10-08 the scheduled job runs memory sync only.** Conversation and sidebar-record sync kept producing diverged histories and were retired: `scheduled_sync.py` calls only `memory_sync.py`. Each machine keeps its own chats (the Mac's are in its nightly restic backup on Linux). `check_sync_health.py` and `app_sessions_sync.py` remain for manual use; the last alert and state backups were moved out of `state/`. The Mac repo root in `config.json` changes to `~/GitHub` when the Mac repos move there.
+
 Machine-specific values (Mac user, addresses, home and GitHub roots, alert email) live in `config.json`, which is gitignored; copy `config.example.json` to start. The Mac needs the same file next to the scripts.
 
 Configured September 18, 2026. Linux cutoff recorded at 2026-09-19T00:25:11.418640+00:00.

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""systemd entry point: run the conversation sync health check, then memory sync.
+"""systemd entry point: Claude Code memory sync between the Mac and Linux.
+
+Conversation and sidebar-record sync were retired on 2026-10-08 (they kept
+diverging; each machine now keeps its own chats and the Mac's are in the nightly
+restic backup). check_sync_health.py and app_sessions_sync.py remain for reference.
 
 Alerts go to the desktop via notify-send, deduplicated the same way the Codex
 automation did: one alert per unresolved incident, offline is never an alert,
@@ -74,18 +78,7 @@ def run(args, timeout):
 
 def main():
     STATE.mkdir(parents=True, exist_ok=True)
-    # 1. conversations (existing checker, unchanged)
-    try:
-        rc, out, err = run([str(BASE / 'check_sync_health.py')], 1000)
-        health = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
-    except Exception as e:
-        health = {'status': 'checker_error', 'message': str(e), 'notify': False}
-        log('checker crashed: ' + str(e))
-    log('conversations: %s - %s' % (health.get('status'), health.get('message')))
-    if health.get('notify'):
-        raise_alert('conversations:' + str(health.get('alert_kind')), 'Conversation sync: ' + health.get('message', ''))
-
-    # 2. memories
+    # memories
     mh = json.loads(MEM_HEALTH.read_text()) if MEM_HEALTH.exists() else {}
     try:
         rc, out, err = run([str(BASE / 'memory_sync.py'), '--apply'], 700)
@@ -119,43 +112,14 @@ def main():
     mh['last_check'] = time.time()
     MEM_HEALTH.write_text(json.dumps(mh, indent=2))
 
-    # 3. app sidebar records (only once state/app-sessions.enabled exists)
-    if (STATE / 'app-sessions.enabled').exists():
-        try:
-            rc, out, err = run([str(BASE / 'app_sessions_sync.py'), '--apply'], 700)
-        except subprocess.TimeoutExpired:
-            rc, out, err = 124, '', 'app sessions sync exceeded its time limit'
-        if rc == 0:
-            rep = json.loads(out)
-            n = sum(len(rep.get(k, {}).get('applied', [])) for k in ('mac_to_linux', 'linux_to_mac'))
-            log('app sessions: ok, %d record(s) written' % n)
-            local_new = [t for _, t, _ in rep.get('mac_to_linux', {}).get('applied', [])]
-            if local_new:
-                # The app only reads its session store at launch.
-                try:
-                    subprocess.run(['notify-send', '-u', 'normal', '-a', 'agent-sync', 'New Claude sessions from the Mac',
-                                    '%d imported (%s). Restart the Claude app to see them in the sidebar.'
-                                    % (len(local_new), ', '.join(local_new[:3]) + (', ...' if len(local_new) > 3 else ''))], timeout=10)
-                except Exception:
-                    pass
-        elif any(x in err.lower() for x in NETWORK):
-            log('app sessions: waiting for connection')
-        else:
-            log('app sessions: FAILED: ' + err.strip()[-300:])
-
-
-    # 4. "online but not working": Mac answers on port 22, yet no success for 2 h
+    # "online but not working": Mac answers on port 22, yet no success for 2 h
     now = time.time()
-    conv_ok = health.get('last_success') or 0
     mem_ok = mh.get('last_success') or 0
-    both_healthy = health.get('status') == 'healthy' and mh.get('status') == 'healthy'
-    if both_healthy and not health.get('alert_active') and not mh.get('alert_active'):
+    if mh.get('status') == 'healthy' and not mh.get('alert_active'):
         clear_alert()
-    elif mac_reachable() and (now - conv_ok > STALE_SECONDS or now - mem_ok > STALE_SECONDS):
-        ages = 'conversations %.0f min, memories %.0f min' % ((now - conv_ok) / 60, (now - mem_ok) / 60)
-        raise_alert('stale', 'Mac is reachable but sync has not succeeded for: ' + ages +
-                    '. Last states: ' + str(health.get('status')) + ' / ' + str(mh.get('status')))
-
+    elif mac_reachable() and now - mem_ok > STALE_SECONDS:
+        raise_alert('stale', 'Mac is reachable but memory sync has not succeeded for %.0f min. Last state: %s'
+                    % ((now - mem_ok) / 60, mh.get('status')))
 
 if __name__ == '__main__':
     main()
